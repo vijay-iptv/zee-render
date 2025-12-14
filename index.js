@@ -6,29 +6,29 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 /* =======================
-   Helper: Base64 Encode
+   Helper: base64
 ======================= */
-const base64 = (obj) =>
+const b64 = (obj) =>
   Buffer.from(JSON.stringify(obj)).toString("base64");
 
 /* =======================
-   API Route
+   API
 ======================= */
 app.get("/zee5/hdntl", async (req, res) => {
   try {
-    const userAgent =
+    const UA =
       req.headers["user-agent"] ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
     /* =======================
-       Generate Guest Token
+       Guest Token
     ======================= */
     const guestToken = uuidv4();
 
     /* =======================
-       Generate DD Token
+       DD Token
     ======================= */
-    const ddToken = base64({
+    const ddToken = b64({
       schema_version: "1",
       os_name: "N/A",
       os_version: "N/A",
@@ -48,36 +48,46 @@ app.get("/zee5/hdntl", async (req, res) => {
       security_capabilities: {
         encryption: ["WIDEVINE_AES_CTR"],
         widevine_security_level: ["L3"],
-        hdcp_version: ["HDCP_V1", "HDCP_V2", "HDCP_V2_1", "HDCP_V2_2"]
+        hdcp_version: [
+          "HDCP_V1",
+          "HDCP_V2",
+          "HDCP_V2_1",
+          "HDCP_V2_2"
+        ]
       }
     });
 
     /* =======================
-       Fetch Platform Token
+       Platform Token (NEW)
     ======================= */
-    const pageRes = await fetch(
-      "https://www.zee5.com/live-tv/aaj-tak/0-9-aajtak",
+    const tokenRes = await fetch(
+      "https://gwapi.zee5.com/content/launch",
       {
-        headers: { "User-Agent": userAgent }
+        headers: {
+          "User-Agent": UA,
+          "Accept": "application/json",
+          "Origin": "https://www.zee5.com",
+          "Referer": "https://www.zee5.com/"
+        }
       }
     );
 
-    const html = await pageRes.text();
-    const match = html.match(
-      /"gwapiPlatformToken"\s*:\s*"([^"]+)"/
-    );
+    const tokenData = await tokenRes.json();
 
-    if (!match) {
-      return res.status(404).json({
+    const platformToken =
+      tokenData?.platform_token ||
+      tokenData?.platformToken ||
+      tokenData?.data?.platform_token;
+
+    if (!platformToken) {
+      return res.status(500).json({
         success: false,
         message: "Platform token not found"
       });
     }
 
-    const platformToken = match[1];
-
     /* =======================
-       Fetch Playback Details
+       Secure Playback API
     ======================= */
     const payload = JSON.stringify({
       "x-access-token": platformToken,
@@ -101,33 +111,32 @@ app.get("/zee5/hdntl", async (req, res) => {
     const apiRes = await fetch(apiUrl, {
       method: "POST",
       headers: {
-        Accept: "application/json",
         "Content-Type": "application/json",
-        Origin: "https://www.zee5.com",
-        Referer: "https://www.zee5.com/",
-        "User-Agent": userAgent,
+        "Accept": "application/json",
+        "User-Agent": UA,
+        "Origin": "https://www.zee5.com",
+        "Referer": "https://www.zee5.com/",
         "Content-Length": payload.length
       },
       body: payload
     });
 
     const apiData = await apiRes.json();
-
     const m3u8Url =
       apiData?.keyOsDetails?.video_token;
 
-    if (!m3u8Url || !m3u8Url.startsWith("http")) {
+    if (!m3u8Url) {
       return res.status(404).json({
         success: false,
-        message: "M3U8 URL not found"
+        message: "M3U8 not found"
       });
     }
 
     /* =======================
-       Load M3U8 & Extract hdntl
+       Extract hdntl
     ======================= */
     const m3u8Res = await fetch(m3u8Url, {
-      headers: { "User-Agent": userAgent }
+      headers: { "User-Agent": UA }
     });
 
     const m3u8Text = await m3u8Res.text();
@@ -136,23 +145,25 @@ app.get("/zee5/hdntl", async (req, res) => {
     if (!hdntlMatch) {
       return res.status(404).json({
         success: false,
-        message: "hdntl token not found"
+        message: "hdntl not found"
       });
     }
 
     /* =======================
-       Final Response
+       Response
     ======================= */
     res.json({
       success: true,
-      hdntl: hdntlMatch[0],
-      m3u8: m3u8Url
+      platform_token: platformToken,
+      guest_token: guestToken,
+      m3u8: m3u8Url,
+      hdntl: hdntlMatch[0]
     });
 
-  } catch (err) {
+  } catch (e) {
     res.status(500).json({
       success: false,
-      error: err.message
+      error: e.message
     });
   }
 });
