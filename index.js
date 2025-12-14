@@ -6,20 +6,19 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 /* =======================
-   Helper: base64
+   Helper
 ======================= */
 const b64 = (obj) =>
   Buffer.from(JSON.stringify(obj)).toString("base64");
+
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
 
 /* =======================
    API
 ======================= */
 app.get("/zee5/hdntl", async (req, res) => {
   try {
-    const UA =
-      req.headers["user-agent"] ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
-
     /* =======================
        Guest Token
     ======================= */
@@ -58,21 +57,36 @@ app.get("/zee5/hdntl", async (req, res) => {
     });
 
     /* =======================
-       Platform Token (NEW)
+       Platform Token (ROBUST)
     ======================= */
     const tokenRes = await fetch(
       "https://gwapi.zee5.com/content/launch",
       {
         headers: {
           "User-Agent": UA,
-          "Accept": "application/json",
+          "Accept": "application/json, text/plain, */*",
+          "Accept-Language": "en-IN,en;q=0.9",
           "Origin": "https://www.zee5.com",
-          "Referer": "https://www.zee5.com/"
+          "Referer": "https://www.zee5.com/",
+          "Sec-Fetch-Site": "same-site",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Dest": "empty"
         }
       }
     );
 
-    const tokenData = await tokenRes.json();
+    const tokenRaw = await tokenRes.text();
+
+    /* ⛔ HTML returned → blocked */
+    if (tokenRaw.trim().startsWith("<")) {
+      return res.status(503).json({
+        success: false,
+        message: "ZEE5 blocked platform token request",
+        preview: tokenRaw.slice(0, 120)
+      });
+    }
+
+    const tokenData = JSON.parse(tokenRaw);
 
     const platformToken =
       tokenData?.platform_token ||
@@ -82,12 +96,13 @@ app.get("/zee5/hdntl", async (req, res) => {
     if (!platformToken) {
       return res.status(500).json({
         success: false,
-        message: "Platform token not found"
+        message: "Platform token missing",
+        tokenData
       });
     }
 
     /* =======================
-       Secure Playback API
+       Secure Playback
     ======================= */
     const payload = JSON.stringify({
       "x-access-token": platformToken,
@@ -111,24 +126,33 @@ app.get("/zee5/hdntl", async (req, res) => {
     const apiRes = await fetch(apiUrl, {
       method: "POST",
       headers: {
+        "User-Agent": UA,
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": UA,
         "Origin": "https://www.zee5.com",
-        "Referer": "https://www.zee5.com/",
-        "Content-Length": payload.length
+        "Referer": "https://www.zee5.com/"
       },
       body: payload
     });
 
-    const apiData = await apiRes.json();
-    const m3u8Url =
-      apiData?.keyOsDetails?.video_token;
+    const apiRaw = await apiRes.text();
+
+    if (apiRaw.trim().startsWith("<")) {
+      return res.status(503).json({
+        success: false,
+        message: "Playback API blocked",
+        preview: apiRaw.slice(0, 120)
+      });
+    }
+
+    const apiData = JSON.parse(apiRaw);
+    const m3u8Url = apiData?.keyOsDetails?.video_token;
 
     if (!m3u8Url) {
       return res.status(404).json({
         success: false,
-        message: "M3U8 not found"
+        message: "M3U8 not found",
+        apiData
       });
     }
 
@@ -145,29 +169,30 @@ app.get("/zee5/hdntl", async (req, res) => {
     if (!hdntlMatch) {
       return res.status(404).json({
         success: false,
-        message: "hdntl not found"
+        message: "hdntl token not found"
       });
     }
 
     /* =======================
-       Response
+       SUCCESS
     ======================= */
     res.json({
       success: true,
-      platform_token: platformToken,
-      guest_token: guestToken,
       m3u8: m3u8Url,
       hdntl: hdntlMatch[0]
     });
 
-  } catch (e) {
+  } catch (err) {
     res.status(500).json({
       success: false,
-      error: e.message
+      error: err.message
     });
   }
 });
 
+/* =======================
+   Start Server
+======================= */
 app.listen(PORT, () => {
-  console.log("ZEE5 API running on port", PORT);
+  console.log("ZEE5 Render API running on port", PORT);
 });
